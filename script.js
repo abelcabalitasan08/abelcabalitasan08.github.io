@@ -534,3 +534,142 @@ function showBotMessage(text) {
   if (error) console.error("Session restore error:", error.message);
   if (data?.session?.user && !currentUser) startChat(data.session.user);
 })();
+
+if (isMine) {
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+
+  const menuButton = document.createElement("button");
+  menuButton.type = "button";
+  menuButton.className = "message-menu-toggle";
+  menuButton.textContent = "⋮";
+  menuButton.setAttribute("aria-label", "Message options");
+  menuButton.setAttribute("aria-expanded", "false");
+
+  const menu = document.createElement("div");
+  menu.className = "message-menu";
+  menu.hidden = true;
+
+  // EDIT BUTTON
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "edit-btn";
+  editBtn.textContent = "Edit";
+
+  editBtn.addEventListener("click", async () => {
+    menu.hidden = true;
+    menuButton.setAttribute("aria-expanded", "false");
+
+    if (!currentUser || currentUser.id !== msg.user_id) return;
+
+    const updated = prompt("Edit your message:", text.textContent);
+    if (updated === null) return;
+
+    const newContent = updated.trim();
+
+    if (!newContent || newContent.length > 500) {
+      alert("Message must contain 1 to 500 characters.");
+      return;
+    }
+
+    if (newContent === text.textContent) return;
+
+    editBtn.disabled = true;
+
+    try {
+      const { data, error } = await sb.from("messages")
+        .update({ content: newContent })
+        .eq("id", msg.id)
+        .eq("user_id", currentUser.id)
+        .select("id, user_id, content, created_at, updated_at")
+        .maybeSingle();
+
+      if (error) {
+        explainDbError("Edit message", error);
+        return;
+      }
+
+      if (!data) {
+        alert("No message was updated. Check the UPDATE policy and message ownership.");
+        return;
+      }
+
+      showMessage(data);
+    } catch (error) {
+      explainDbError("Edit message", error);
+    } finally {
+      editBtn.disabled = false;
+    }
+  });
+
+  // UNSEND BUTTON
+  const unsendBtn = document.createElement("button");
+  unsendBtn.type = "button";
+  unsendBtn.className = "unsend-btn";
+  unsendBtn.textContent = "Unsend";
+
+  unsendBtn.addEventListener("click", async () => {
+    menu.hidden = true;
+    menuButton.setAttribute("aria-expanded", "false");
+
+    if (!currentUser || currentUser.id !== msg.user_id) return;
+
+    if (!confirm("Unsend this message for everyone?")) return;
+
+    unsendBtn.disabled = true;
+
+    try {
+      const { data, error } = await sb.from("messages")
+        .delete()
+        .eq("id", msg.id)
+        .eq("user_id", currentUser.id)
+        .select("id")
+        .maybeSingle();
+
+      if (error) {
+        explainDbError("Unsend message", error);
+        return;
+      }
+
+      if (!data) {
+        alert("No message was deleted. Check the DELETE policy and message ownership.");
+        return;
+      }
+
+      item.remove();
+      showEmptyState();
+    } catch (error) {
+      explainDbError("Unsend message", error);
+    } finally {
+      unsendBtn.disabled = false;
+    }
+  });
+
+  // THREE-DOT MENU
+  menuButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+
+    const shouldOpen = menu.hidden;
+
+    document.querySelectorAll(".message-menu").forEach(otherMenu => {
+      otherMenu.hidden = true;
+
+      const otherButton = otherMenu.parentElement
+        ?.querySelector(".message-menu-toggle");
+
+      if (otherButton) {
+        otherButton.setAttribute("aria-expanded", "false");
+      }
+    });
+
+    menu.hidden = !shouldOpen;
+    menuButton.setAttribute(
+      "aria-expanded",
+      String(shouldOpen)
+    );
+  });
+
+  menu.append(editBtn, unsendBtn);
+  actions.append(menuButton, menu);
+  item.append(actions);
+}
