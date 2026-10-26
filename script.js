@@ -188,7 +188,26 @@ async function loadNames() {
     console.error("Profile loading error:", error.message);
     return;
   }
-  (data || []).forEach(profile => { names[profile.id] = profile.display_name || "Classmate"; });
+ 
+async function loadNames() {
+  const { data, error } = await sb
+    .from("profiles")
+    .select("id, display_name");
+
+  if (error) {
+    console.error("Profile loading error:", error.message);
+    return;
+  }
+
+  (data || []).forEach(profile => {
+    if (profile.display_name && profile.display_name.trim()) {
+      names[profile.id] = profile.display_name.trim();
+    }
+  });
+
+  console.log("Loaded profile names:", names);
+}
+
 }
 async function nameFor(userId) {
   if (names[userId]) return names[userId];
