@@ -1,676 +1,467 @@
-
-/* =====================================================
-   1. SUPABASE CONNECTION
-===================================================== */
-
+/* =========================================================
+   CLASS CHAT — Supabase client and configuration
+   Keep the publishable/anon key in the browser only.
+   NEVER put a Supabase service_role key in this file.
+========================================================= */
 const SUPABASE_URL = "https://ounqhurlycwgngyvxkll.supabase.co";
 const SUPABASE_KEY = "sb_publishable_2RBbbIj6-Wc2cRdqZWhWSw_r9vP8XMH";
-
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-
-/* =====================================================
-   2. HTML ELEMENTS
-===================================================== */
-
-const authScreen = document.getElementById("auth-screen");
-const chatScreen = document.getElementById("chat-screen");
-const authForm = document.getElementById("auth-form");
-const authMessage = document.getElementById("auth-message");
-
-const displayName = document.getElementById("display-name");
-const emailInput = document.getElementById("email");
-const passwordInput = document.getElementById("password");
-
-const signupBtn = document.getElementById("signup-btn");
-const logoutBtn = document.getElementById("logout-btn");
-
-const who = document.getElementById("who");
-const messageList = document.getElementById("messages");
-const messageForm = document.getElementById("message-form");
-const messageInput = document.getElementById("message-input");
-
-const onlineElement = document.getElementById("online-users");
-
-
-/* =====================================================
-   3. APP VARIABLES
-===================================================== */
+const $ = (id) => document.getElementById(id);
+const authScreen = $("auth-screen");
+const chatScreen = $("chat-screen");
+const authForm = $("auth-form");
+const authMessage = $("auth-message");
+const displayName = $("display-name");
+const emailInput = $("email");
+const passwordInput = $("password");
+const signupBtn = $("signup-btn");
+const logoutBtn = $("logout-btn");
+const who = $("who");
+const messageList = $("messages");
+const messageForm = $("message-form");
+const messageInput = $("message-input");
+const sendBtn = $("send-btn");
+const onlineElement = $("online-users");
+const onlineCount = $("online-count");
+const typingElement = $("typing-indicator");
+const themeToggle = $("theme-toggle");
 
 let currentUser = null;
 let channel = null;
 let presenceChannel = null;
-
-const names = {};
-
 let startingChat = false;
+let typingTimer = null;
+const names = Object.create(null);
+const typingUsers = new Map();
 
+const THEME_KEY = "class-chat-theme";
+function applyTheme(theme) {
+  const chosen = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = chosen;
+  themeToggle.textContent = chosen === "dark" ? "☀️" : "🌙";
+  themeToggle.setAttribute("aria-label", chosen === "dark" ? "Switch to light mode" : "Switch to dark mode");
+  themeToggle.title = chosen === "dark" ? "Switch to light mode" : "Switch to dark mode";
+}
+try {
+  const savedTheme = localStorage.getItem(THEME_KEY);
+  applyTheme(savedTheme || "dark");
+} catch { applyTheme("dark"); }
+themeToggle.addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(next);
+  try { localStorage.setItem(THEME_KEY, next); } catch {}
+});
 
-/* =====================================================
-   4. SIGN UP
-===================================================== */
+function getDisplayName(user) {
+  return names[user.id] || user.user_metadata?.display_name || user.email?.split("@")[0] || "Classmate";
+}
+function initials(name) {
+  return String(name || "?").trim().split(/\s+/).slice(0, 2).map(part => part[0] || "").join("").toUpperCase() || "?";
+}
+function explainDbError(action, error) {
+  console.error(`${action} error:`, error);
+  const message = error?.message || "Unknown database error";
+  if (/permission denied|row-level security|violates row-level security|not allowed/i.test(message)) {
+    alert(`${action} was blocked by Supabase permissions.\n\nRLS is still enabled. Check the ${action.toLowerCase()} policy on public.messages and confirm it allows the signed-in owner (auth.uid() = user_id). Do not disable RLS or use a service-role key in the browser.\n\nSupabase says: ${message}`);
+  } else {
+    alert(`${action} failed: ${message}`);
+  }
+}
+function scrollToLatest() { messageList.scrollTop = messageList.scrollHeight; }
+function showEmptyState() {
+  if (messageList.children.length) return;
+  const empty = document.createElement("li");
+  empty.className = "empty-state";
+  empty.textContent = "No messages yet. Start the conversation with your class!";
+  messageList.appendChild(empty);
+}
+function removeEmptyState() {
+  const empty = messageList.querySelector(".empty-state");
+  if (empty) empty.remove();
+}
 
+/* ---------------- Authentication ---------------- */
 async function signUp() {
   const name = displayName.value.trim();
   const email = emailInput.value.trim();
   const password = passwordInput.value;
-
   if (name.length < 2 || name.length > 24) {
-    authMessage.textContent =
-      "Display name must be 2 to 24 characters.";
+    authMessage.textContent = "Display name must be 2 to 24 characters.";
     return;
   }
-
-  if (!email || !password) {
-    authMessage.textContent =
-      "Please enter your email and password.";
+  if (!email || password.length < 8) {
+    authMessage.textContent = "Enter your email and a password with at least 8 characters.";
     return;
   }
-
-  authMessage.textContent = "Creating your account...";
+  authMessage.textContent = "Creating your account…";
   signupBtn.disabled = true;
-
   try {
     const { data, error } = await sb.auth.signUp({
-      email: email,
-      password: password,
-      options: {
-        data: {
-          display_name: name
-        }
-      }
+      email, password, options: { data: { display_name: name } }
     });
-
-    if (error) {
-      authMessage.textContent = error.message;
-    } else if (!data.session) {
-      authMessage.textContent =
-        "Account created! Please check your email to confirm.";
-    } else {
-      authMessage.textContent = "Account created successfully!";
-    }
+    if (error) authMessage.textContent = error.message;
+    else if (!data.session) authMessage.textContent = "Account created. Check your email to confirm, then log in.";
+    else authMessage.textContent = "Account created successfully.";
   } catch (error) {
     console.error(error);
     authMessage.textContent = "Something went wrong during signup.";
-  } finally {
-    signupBtn.disabled = false;
-  }
+  } finally { signupBtn.disabled = false; }
 }
-
-
-/* =====================================================
-   5. LOG IN
-===================================================== */
-
 async function logIn() {
-  authMessage.textContent = "Logging in...";
-
+  authMessage.textContent = "Logging in…";
   try {
     const { error } = await sb.auth.signInWithPassword({
-      email: emailInput.value.trim(),
-      password: passwordInput.value
+      email: emailInput.value.trim(), password: passwordInput.value
     });
-
-    if (error) {
-      authMessage.textContent = error.message;
-    } else {
-      authMessage.textContent = "";
-    }
+    authMessage.textContent = error ? error.message : "";
   } catch (error) {
     console.error(error);
-    authMessage.textContent = "Unable to log in.";
+    authMessage.textContent = "Unable to log in right now.";
   }
 }
-
-
-/* =====================================================
-   6. AUTH BUTTON EVENTS
-===================================================== */
-
 authForm.addEventListener("submit", (event) => {
   event.preventDefault();
   logIn();
 });
-
 signupBtn.addEventListener("click", () => {
-  if (authForm.reportValidity()) {
-    signUp();
-  }
+  if (authForm.reportValidity()) signUp();
 });
-
 logoutBtn.addEventListener("click", async () => {
   logoutBtn.disabled = true;
-
   try {
     const { error } = await sb.auth.signOut();
-
-    if (error) {
-      alert("Logout failed: " + error.message);
-    }
-  } finally {
-    logoutBtn.disabled = false;
-  }
+    if (error) alert("Logout failed: " + error.message);
+  } finally { logoutBtn.disabled = false; }
 });
-
-
-/* =====================================================
-   7. AUTH STATE LISTENER
-===================================================== */
 
 sb.auth.onAuthStateChange((event, session) => {
   const user = session?.user || null;
-
   setTimeout(() => {
-    if (user && (!currentUser || currentUser.id !== user.id)) {
-      startChat(user);
-    } else if (!user && currentUser) {
-      stopChat();
-    }
+    if (user && (!currentUser || currentUser.id !== user.id)) startChat(user);
+    else if (!user && currentUser) stopChat();
   }, 0);
 });
 
-
-/* =====================================================
-   8. START CHAT
-===================================================== */
-
+/* ---------------- Chat lifecycle ---------------- */
 async function startChat(user) {
   if (startingChat) return;
-
   startingChat = true;
   currentUser = user;
-
   authScreen.hidden = true;
   chatScreen.hidden = false;
-  who.textContent = "Loading...";
-
+  who.textContent = getDisplayName(user);
   try {
     await loadNames();
-
     if (!currentUser || currentUser.id !== user.id) return;
-
-    who.textContent =
-      names[user.id] ||
-      user.user_metadata?.display_name ||
-      "Signed in";
-
+    who.textContent = getDisplayName(user);
     await loadMessages();
-
     if (!currentUser || currentUser.id !== user.id) return;
-
-    listenForNewMessages();
+    listenForChatEvents();
     await startOnlineUsers();
-
     messageInput.focus();
   } catch (error) {
     console.error("Could not start chat:", error);
-  } finally {
-    startingChat = false;
-  }
+  } finally { startingChat = false; }
 }
-
-
-/* =====================================================
-   9. STOP CHAT
-===================================================== */
-
 function stopChat() {
   currentUser = null;
   startingChat = false;
-
-  if (channel) {
-    sb.removeChannel(channel);
-    channel = null;
-  }
-
-  if (presenceChannel) {
-    sb.removeChannel(presenceChannel);
-    presenceChannel = null;
-  }
-
-  messageList.innerHTML = "";
-
-  if (onlineElement) {
-    onlineElement.textContent = "Online users: 0";
-  }
-
+  if (channel) { sb.removeChannel(channel); channel = null; }
+  if (presenceChannel) { sb.removeChannel(presenceChannel); presenceChannel = null; }
+  if (typingTimer) clearTimeout(typingTimer);
+  typingUsers.clear();
+  updateTypingIndicator();
+  messageList.replaceChildren();
+  onlineElement.replaceChildren();
+  onlineElement.textContent = "You're offline";
+  onlineCount.textContent = "0 online";
   passwordInput.value = "";
-
   chatScreen.hidden = true;
   authScreen.hidden = false;
 }
 
-
-/* =====================================================
-   10. LOAD PROFILES
-===================================================== */
-
+/* ---------------- Profiles and messages ---------------- */
 async function loadNames() {
-  const { data, error } = await sb
-    .from("profiles")
-    .select("id, display_name");
-
+  const { data, error } = await sb.from("profiles").select("id, display_name");
   if (error) {
     console.error("Profile loading error:", error.message);
     return;
   }
-
-  data.forEach((profile) => {
-    names[profile.id] = profile.display_name || "Unknown";
-  });
+  (data || []).forEach(profile => { names[profile.id] = profile.display_name || "Classmate"; });
 }
-
-
-/* =====================================================
-   11. GET DISPLAY NAME
-===================================================== */
-
 async function nameFor(userId) {
   if (names[userId]) return names[userId];
-
-  const { data, error } = await sb
-    .from("profiles")
-    .select("display_name")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (error) {
-    console.error("Name loading error:", error.message);
-  }
-
-  names[userId] =
-    data?.display_name || "Unknown";
-
+  const { data, error } = await sb.from("profiles").select("display_name").eq("id", userId).maybeSingle();
+  if (error) console.error("Name loading error:", error.message);
+  names[userId] = data?.display_name || "Classmate";
   return names[userId];
 }
-
-
-/* =====================================================
-   12. LOAD MESSAGES
-===================================================== */
-
 async function loadMessages() {
-  const { data, error } = await sb
-    .from("messages")
+  const { data, error } = await sb.from("messages")
     .select("id, user_id, content, created_at")
-    .order("created_at", { ascending: false })
-    .limit(50);
-
+    .order("created_at", { ascending: false }).limit(50);
   if (error) {
-    console.error("Message loading error:", error.message);
+    explainDbError("Load messages", error);
     return;
   }
-
-  messageList.innerHTML = "";
-
-  for (const msg of data.reverse()) {
+  messageList.replaceChildren();
+  for (const msg of (data || []).reverse()) {
     await nameFor(msg.user_id);
     showMessage(msg);
   }
+  showEmptyState();
 }
-
-
-/* =====================================================
-   13. DISPLAY MESSAGE
-   Includes EDIT and UNSEND buttons
-===================================================== */
-
 function showMessage(msg) {
-  if (!currentUser) return;
-
-  const selector =
-    '[data-id="' + CSS.escape(String(msg.id)) + '"]';
-
+  if (!currentUser || !msg) return;
+  const selector = `[data-id="${CSS.escape(String(msg.id))}"]`;
   const existing = messageList.querySelector(selector);
-
-  if (existing) {
-    existing.remove();
-  }
+  if (existing) existing.remove();
+  removeEmptyState();
 
   const isMine = msg.user_id === currentUser.id;
-
+  const authorName = names[msg.user_id] || "Classmate";
   const item = document.createElement("li");
-  item.className = isMine ? "message mine" : "message";
+  item.className = `message${isMine ? " mine" : ""}`;
   item.dataset.id = msg.id;
 
+  const top = document.createElement("div");
+  top.className = "message-top";
+  const avatar = document.createElement("span");
+  avatar.className = "avatar tiny";
+  avatar.textContent = initials(authorName);
+  avatar.setAttribute("aria-hidden", "true");
   const author = document.createElement("span");
   author.className = "author";
-  author.textContent = names[msg.user_id] || "Unknown";
+  author.textContent = isMine ? "You" : authorName;
+  top.append(avatar, author);
 
   const text = document.createElement("p");
   text.className = "message-text";
-  text.textContent = msg.content;
+  text.textContent = msg.content ?? "";
 
   const time = document.createElement("time");
-  time.textContent = new Date(msg.created_at).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit"
-  });
+  time.dateTime = msg.created_at || "";
+  time.textContent = msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
 
-  item.append(author, text, time);
-
-  /* EDIT AND UNSEND ARE AVAILABLE ONLY ON YOUR MESSAGES */
+  item.append(top, text);
+  if (msg.updated_at && msg.updated_at !== msg.created_at) {
+    const edited = document.createElement("span");
+    edited.className = "edited-label";
+    edited.textContent = "edited";
+    item.append(edited);
+  }
+  item.append(time);
 
   if (isMine) {
     const actions = document.createElement("div");
     actions.className = "message-actions";
-
-    /* EDIT BUTTON */
-
     const editBtn = document.createElement("button");
     editBtn.type = "button";
     editBtn.className = "edit-btn";
     editBtn.textContent = "Edit";
-
     editBtn.addEventListener("click", async () => {
       if (!currentUser || currentUser.id !== msg.user_id) return;
-
-      const updated = prompt(
-        "Edit your message:",
-        text.textContent
-      );
-
+      const updated = prompt("Edit your message:", text.textContent);
       if (updated === null) return;
-
       const newContent = updated.trim();
-
-      if (!newContent) {
-        alert("Message cannot be empty.");
+      if (!newContent || newContent.length > 500) {
+        alert("Message must contain 1 to 500 characters.");
         return;
       }
-
       if (newContent === text.textContent) return;
-
       editBtn.disabled = true;
-
       try {
-        const { data, error } = await sb
-          .from("messages")
+        const { data, error } = await sb.from("messages")
           .update({ content: newContent })
-          .eq("id", msg.id)
-          .eq("user_id", currentUser.id)
-          .select("id, user_id, content, created_at")
-          .maybeSingle();
-
-        if (error) {
-          alert("Could not edit: " + error.message);
-          return;
-        }
-
+          .eq("id", msg.id).eq("user_id", currentUser.id)
+          .select("id, user_id, content, created_at, updated_at").maybeSingle();
+        if (error) { explainDbError("Edit message", error); return; }
         if (!data) {
-          alert(
-            "Message was not updated. Check your Supabase UPDATE policy."
-          );
+          alert("No message was updated. Check the UPDATE policy and confirm user_id matches your signed-in Supabase user.");
           return;
         }
-
-        text.textContent = data.content;
+        showMessage(data);
       } catch (error) {
-        console.error(error);
-        alert("An unexpected error occurred while editing.");
-      } finally {
-        editBtn.disabled = false;
-      }
+        explainDbError("Edit message", error);
+      } finally { editBtn.disabled = false; }
     });
-
-
-    /* UNSEND BUTTON */
 
     const unsendBtn = document.createElement("button");
     unsendBtn.type = "button";
     unsendBtn.className = "unsend-btn";
     unsendBtn.textContent = "Unsend";
-
     unsendBtn.addEventListener("click", async () => {
       if (!currentUser || currentUser.id !== msg.user_id) return;
-
-      if (!confirm("Are you sure you want to unsend this message?")) {
-        return;
-      }
-
+      if (!confirm("Unsend this message for everyone?")) return;
       unsendBtn.disabled = true;
-
       try {
-        const { data, error } = await sb
-          .from("messages")
-          .delete()
-          .eq("id", msg.id)
-          .eq("user_id", currentUser.id)
-          .select("id")
-          .maybeSingle();
-
-        if (error) {
-          alert("Could not unsend: " + error.message);
-          return;
-        }
-
+        const { data, error } = await sb.from("messages").delete()
+          .eq("id", msg.id).eq("user_id", currentUser.id).select("id").maybeSingle();
+        if (error) { explainDbError("Unsend message", error); return; }
         if (!data) {
-          alert(
-            "Message was not deleted. Check your Supabase DELETE policy."
-          );
+          alert("No message was deleted. Check the DELETE policy and message ownership.");
           return;
         }
-
         item.remove();
+        showEmptyState();
       } catch (error) {
-        console.error(error);
-        alert("An unexpected error occurred while unsending.");
-      } finally {
-        unsendBtn.disabled = false;
-      }
+        explainDbError("Unsend message", error);
+      } finally { unsendBtn.disabled = false; }
     });
-
     actions.append(editBtn, unsendBtn);
-    item.appendChild(actions);
+    item.append(actions);
   }
-
-  messageList.appendChild(item);
-  messageList.scrollTop = messageList.scrollHeight;
+  messageList.append(item);
+  scrollToLatest();
 }
 
-
-/* =====================================================
-   14. SEND MESSAGE
-===================================================== */
-
+/* ---------------- Send messages and weather command ---------------- */
 messageForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-
   if (!currentUser) return;
-
   const content = messageInput.value.trim();
-
-  if (!content) return;
-
-  /* WEATHER BOT COMMAND */
-
+  if (!content || content.length > 500) return;
   if (content.startsWith("/")) {
     messageInput.value = "";
-    handleCommand(content);
+    sendTyping(false);
+    await handleCommand(content);
     return;
   }
-
-  messageInput.disabled = true;
-
+  sendBtn.disabled = true;
   try {
-    const { error } = await sb
-      .from("messages")
-      .insert({ content: content });
-
-    if (error) {
-      alert("Could not send: " + error.message);
-      return;
-    }
-
+    // Keep the existing schema/defaults. If user_id is not defaulted to auth.uid(),
+    // the INSERT policy/schema must be checked in Supabase before changing this.
+    const { error } = await sb.from("messages").insert({ content });
+    if (error) { explainDbError("Send message", error); return; }
     messageInput.value = "";
+    sendTyping(false);
   } catch (error) {
-    console.error(error);
-    alert("Unable to send your message.");
+    explainDbError("Send message", error);
   } finally {
-    messageInput.disabled = false;
+    sendBtn.disabled = false;
     messageInput.focus();
   }
 });
 
-
-/* =====================================================
-   15. REALTIME CHAT
-===================================================== */
-
-function listenForNewMessages() {
-  if (channel) {
-    sb.removeChannel(channel);
-    channel = null;
-  }
-
-  channel = sb
-    .channel("class-chat")
-    .on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "messages"
-      },
-      async (payload) => {
-        await nameFor(payload.new.user_id);
-        showMessage(payload.new);
-      }
-    )
-    .on(
-      "postgres_changes",
-      {
-        event: "UPDATE",
-        schema: "public",
-        table: "messages"
-      },
-      async (payload) => {
-        await nameFor(payload.new.user_id);
-        showMessage(payload.new);
-      }
-    )
-    .on(
-      "postgres_changes",
-      {
-        event: "DELETE",
-        schema: "public",
-        table: "messages"
-      },
-      (payload) => {
-        removeMessage(payload.old.id);
-      }
-    )
-    .subscribe((status) => {
-      console.log("Chat Realtime status:", status);
-    });
+/* ---------------- Realtime messages + typing ---------------- */
+function listenForChatEvents() {
+  if (channel) { sb.removeChannel(channel); channel = null; }
+  channel = sb.channel("class-chat", { config: { broadcast: { self: false } } })
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, async payload => {
+      await nameFor(payload.new.user_id);
+      showMessage(payload.new);
+    })
+    .on("postgres_changes", { event: "UPDATE", schema: "public", table: "messages" }, async payload => {
+      await nameFor(payload.new.user_id);
+      showMessage(payload.new);
+    })
+    .on("postgres_changes", { event: "DELETE", schema: "public", table: "messages" }, payload => {
+      removeMessage(payload.old.id);
+    })
+    .on("broadcast", { event: "typing" }, payload => {
+      const data = payload.payload || {};
+      if (!currentUser || data.user_id === currentUser.id) return;
+      if (data.is_typing) typingUsers.set(data.user_id, data.display_name || "A classmate");
+      else typingUsers.delete(data.user_id);
+      updateTypingIndicator();
+    })
+    .subscribe(status => console.log("Chat realtime status:", status));
 }
-
-
-/* =====================================================
-   16. REMOVE MESSAGE FROM SCREEN
-===================================================== */
-
 function removeMessage(id) {
-  const item = messageList.querySelector(
-    '[data-id="' + CSS.escape(String(id)) + '"]'
-  );
-
+  const item = messageList.querySelector(`[data-id="${CSS.escape(String(id))}"]`);
   if (item) item.remove();
+  showEmptyState();
 }
+function sendTyping(isTyping) {
+  if (!channel || !currentUser) return;
+  channel.send({
+    type: "broadcast",
+    event: "typing",
+    payload: { user_id: currentUser.id, display_name: getDisplayName(currentUser), is_typing: isTyping }
+  }).catch(error => console.debug("Typing status not sent:", error));
+}
+function updateTypingIndicator() {
+  const namesTyping = [...typingUsers.values()];
+  if (!namesTyping.length) {
+    typingElement.hidden = true;
+    typingElement.textContent = "";
+    return;
+  }
+  typingElement.hidden = false;
+  typingElement.textContent = namesTyping.length === 1
+    ? `${namesTyping[0]} is typing…`
+    : `${namesTyping.slice(0, 2).join(" and ")} are typing…`;
+}
+messageInput.addEventListener("input", () => {
+  if (!currentUser || messageInput.value.trim().startsWith("/")) return;
+  sendTyping(true);
+  if (typingTimer) clearTimeout(typingTimer);
+  typingTimer = setTimeout(() => sendTyping(false), 1400);
+});
+messageInput.addEventListener("blur", () => sendTyping(false));
 
-
-/* =====================================================
-   17. ONLINE USERS
-   Shows names of connected users
-===================================================== */
-
+/* ---------------- Online presence and avatars ---------------- */
 async function startOnlineUsers() {
   if (!currentUser) return;
-
-  if (presenceChannel) {
-    await sb.removeChannel(presenceChannel);
-    presenceChannel = null;
-  }
-
+  if (presenceChannel) { await sb.removeChannel(presenceChannel); presenceChannel = null; }
   const userAtStart = currentUser;
-
-  presenceChannel = sb.channel("class-chat-presence", {
-    config: {
-      presence: {
-        key: userAtStart.id
-      }
+  presenceChannel = sb.channel("class-chat-presence", { config: { presence: { key: userAtStart.id } } });
+  presenceChannel.on("presence", { event: "sync" }, () => {
+    const state = presenceChannel.presenceState();
+    const uniqueUsers = new Map();
+    Object.values(state).flat().forEach(person => {
+      if (person.user_id) uniqueUsers.set(person.user_id, person.display_name || "Classmate");
+    });
+    renderOnlineUsers([...uniqueUsers.entries()]);
+  }).subscribe(async (status, error) => {
+    console.log("Presence status:", status);
+    if (status === "SUBSCRIBED" && currentUser?.id === userAtStart.id) {
+      const { error: trackError } = await presenceChannel.track({
+        user_id: userAtStart.id,
+        display_name: getDisplayName(userAtStart),
+        online_at: new Date().toISOString()
+      });
+      if (trackError) console.error("Presence tracking error:", trackError);
+    }
+    if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+      console.error("Presence connection error:", error);
+      onlineElement.textContent = "Could not load online users.";
     }
   });
-
-  presenceChannel
-    .on("presence", { event: "sync" }, () => {
-      const state = presenceChannel.presenceState();
-      const users = Object.values(state).flat();
-
-      const uniqueUsers = new Map();
-
-      users.forEach((user) => {
-        if (user.user_id) {
-          uniqueUsers.set(
-            user.user_id,
-            user.display_name || "Unknown"
-          );
-        }
-      });
-
-      if (onlineElement) {
-        const onlineNames = [...uniqueUsers.values()];
-
-        onlineElement.textContent =
-          "Online (" + onlineNames.length + "): " +
-          onlineNames.join(", ");
-      }
-    })
-    .subscribe(async (status, error) => {
-      console.log("Presence status:", status);
-
-      if (
-        status === "SUBSCRIBED" &&
-        currentUser?.id === userAtStart.id
-      ) {
-        const { error: trackError } =
-          await presenceChannel.track({
-            user_id: userAtStart.id,
-            display_name:
-              names[userAtStart.id] ||
-              userAtStart.user_metadata?.display_name ||
-              "User",
-            online_at: new Date().toISOString()
-          });
-
-        if (trackError) {
-          console.error("Presence tracking error:", trackError);
-        }
-      }
-
-      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        console.error("Presence connection error:", error);
-
-        if (onlineElement) {
-          onlineElement.textContent =
-            "Unable to load online users.";
-        }
-      }
-    });
+}
+function renderOnlineUsers(entries) {
+  onlineCount.textContent = `${entries.length} online`;
+  onlineElement.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No classmates online yet.";
+    onlineElement.append(empty);
+    return;
+  }
+  entries.sort((a, b) => a[1].localeCompare(b[1]));
+  entries.forEach(([id, name]) => {
+    const person = document.createElement("div");
+    person.className = "online-person";
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    avatar.textContent = initials(name);
+    avatar.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.className = "person-name";
+    label.textContent = id === currentUser?.id ? `${name} (you)` : name;
+    const dot = document.createElement("span");
+    dot.className = "online-dot";
+    dot.setAttribute("aria-label", "Online");
+    person.append(avatar, label, dot);
+    onlineElement.append(person);
+  });
 }
 
-
-/* =====================================================
-   18. WEATHER BOT
-===================================================== */
-
-const GEO_URL =
-  "https://geocoding-api.open-meteo.com/v1/search";
-
-const WEATHER_URL =
-  "https://api.open-meteo.com/v1/forecast";
-
-
+/* ---------------- Weather bot: /weather Manila ---------------- */
+const GEO_URL = "https://geocoding-api.open-meteo.com/v1/search";
+const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 function describeWeather(code) {
   if (code === 0) return "clear sky";
   if (code <= 3) return "partly cloudy";
@@ -680,102 +471,66 @@ function describeWeather(code) {
   if (code <= 77) return "snow";
   if (code <= 82) return "rain showers";
   if (code <= 86) return "snow showers";
-
   return "thunderstorm";
 }
-
-
 async function getWeather(city) {
-  const geoUrl =
-    GEO_URL + "?name=" + encodeURIComponent(city) + "&count=1";
-
-  const geoResponse = await fetch(geoUrl);
-
-  if (!geoResponse.ok) {
-    throw new Error("Geocoding failed");
-  }
-
+  const geoResponse = await fetch(`${GEO_URL}?name=${encodeURIComponent(city)}&count=1`);
+  if (!geoResponse.ok) throw new Error("Geocoding failed");
   const geoData = await geoResponse.json();
-
-  if (!geoData.results || geoData.results.length === 0) {
-    return "Sorry, I could not find a city named " + city + ".";
-  }
-
+  if (!geoData.results?.length) return `Sorry, I could not find a city named ${city}.`;
   const place = geoData.results[0];
-
-  const weatherUrl =
-    WEATHER_URL +
-    "?latitude=" + place.latitude +
-    "&longitude=" + place.longitude +
-    "&current=temperature_2m,weather_code,wind_speed_10m";
-
+  const weatherUrl = `${WEATHER_URL}?latitude=${place.latitude}&longitude=${place.longitude}&current=temperature_2m,weather_code,wind_speed_10m`;
   const weatherResponse = await fetch(weatherUrl);
-
-  if (!weatherResponse.ok) {
-    throw new Error("Weather failed");
-  }
-
-  const weatherData = await weatherResponse.json();
-  const now = weatherData.current;
-
-  return (
-    place.name + ", " + place.country + ": " +
-    now.temperature_2m + " degrees C, " +
-    describeWeather(now.weather_code) + ", wind " +
-    now.wind_speed_10m + " km/h"
-  );
+  if (!weatherResponse.ok) throw new Error("Weather failed");
+  const now = (await weatherResponse.json()).current;
+  return `${place.name}, ${place.country}: ${now.temperature_2m}°C, ${describeWeather(now.weather_code)}, wind ${now.wind_speed_10m} km/h.`;
 }
-
-
-/* =====================================================
-   19. WEATHER COMMAND
-===================================================== */
-
-async function handleCommand(text) {
-  const words = text.trim().split(/\s+/);
-
+async function handleCommand(command) {
+  const words = command.trim().split(/\s+/);
   if (words[0].toLowerCase() !== "/weather") {
     showBotMessage("Unknown command. Try: /weather Manila");
     return;
   }
-
   const city = words.slice(1).join(" ").trim();
-
   if (!city) {
     showBotMessage("Try it like this: /weather Manila");
     return;
   }
-
+  showBotMessage(`Checking weather for ${city}…`);
+  const pending = messageList.lastElementChild;
   try {
     const result = await getWeather(city);
+    if (pending) pending.remove();
     showBotMessage(result);
   } catch (error) {
     console.error(error);
-
-    showBotMessage(
-      "The weather service is not answering right now."
-    );
+    if (pending) pending.remove();
+    showBotMessage("The weather service is not answering right now.");
   }
 }
-
-
-/* =====================================================
-   20. DISPLAY WEATHER BOT MESSAGE
-===================================================== */
-
 function showBotMessage(text) {
+  removeEmptyState();
   const item = document.createElement("li");
   item.className = "message bot";
-
+  const top = document.createElement("div");
+  top.className = "message-top";
+  const avatar = document.createElement("span");
+  avatar.className = "avatar tiny";
+  avatar.textContent = "☁";
   const author = document.createElement("span");
   author.className = "author";
-  author.textContent = "WeatherBot (only you can see this)";
-
+  author.textContent = "WeatherBot · only visible to you";
+  top.append(avatar, author);
   const body = document.createElement("p");
   body.textContent = text;
-
-  item.append(author, body);
-  messageList.appendChild(item);
-
-  messageList.scrollTop = messageList.scrollHeight;
+  item.append(top, body);
+  messageList.append(item);
+  scrollToLatest();
 }
+
+/* Recover an existing session on page refresh. */
+(async () => {
+  const { data, error } = await sb.auth.getSession();
+  if (error) console.error("Session restore error:", error.message);
+  if (data?.session?.user && !currentUser) startChat(data.session.user);
+})();
