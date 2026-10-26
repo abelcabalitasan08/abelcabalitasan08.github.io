@@ -3,114 +3,98 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Class Chat Online</title>
+  <meta name="theme-color" content="#0b1220">
+  <title>Class Chat</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
-  <!-- Screen 1: Sign up or Log in -->
-  <main id="auth-screen" class="chat auth">
+  <main id="auth-screen" class="auth-card">
+    <div class="brand-mark" aria-hidden="true">CC</div>
+    <p class="eyebrow">YOUR CLASSROOM, CONNECTED</p>
     <h1>Class Chat</h1>
-    <p class="subtitle">Log in to join the conversation.</p>
+    <p class="subtitle">Log in to catch up with your classmates.</p>
 
     <form id="auth-form">
-      <label for="display-name">Display name (sign up only)</label>
-      <input
-        id="display-name"
-        type="text"
-        maxlength="24"
-        placeholder="Your name or nickname"
-      >
+      <label for="display-name">Display name <span>(sign up only)</span></label>
+      <input id="display-name" type="text" maxlength="24" placeholder="Your name or nickname" autocomplete="nickname">
 
       <label for="email">Email</label>
-      <input
-        id="email"
-        type="email"
-        required
-        placeholder="you@school.com"
-      >
+      <input id="email" type="email" required placeholder="you@school.com" autocomplete="email">
 
-      <label for="password">Password (at least 8 characters)</label>
-      <input
-        id="password"
-        type="password"
-        minlength="8"
-        required
-      >
+      <label for="password">Password</label>
+      <input id="password" type="password" minlength="8" required placeholder="At least 8 characters" autocomplete="current-password">
 
       <div class="auth-buttons">
         <button type="submit" id="login-btn">Log in</button>
-        <button type="button" id="signup-btn" class="ghost">
-          Sign up
-        </button>
+        <button type="button" id="signup-btn" class="button-secondary">Create account</button>
       </div>
     </form>
-
-    <p id="auth-message" class="auth-message" role="status"></p>
+    <p id="auth-message" class="status-message" role="status" aria-live="polite"></p>
   </main>
 
-  <!-- Screen 2: Chat Room -->
-  <main id="chat-screen" class="chat" hidden>
-
-    <!-- Chat Header -->
-    <header class="chat-header">
-      <h1>Class Chat</h1>
-
-      <div class="controls">
-        <span id="who">Signed in</span>
-        <button id="logout-btn" type="button" class="ghost">
-          Log out
-        </button>
+  <main id="chat-screen" class="app-shell" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark small" aria-hidden="true">CC</div>
+        <div>
+          <h1>Class Chat</h1>
+          <p>Study together. Stay connected.</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button id="theme-toggle" class="icon-button" type="button" aria-label="Switch color theme" title="Switch color theme">☀️</button>
+        <span id="who" class="signed-in-name">Signed in</span>
+        <button id="logout-btn" type="button" class="button-secondary">Log out</button>
       </div>
     </header>
 
-    <!-- Online Users -->
-    <section
-      id="online-users"
-      class="online-users"
-      aria-live="polite"
-      aria-label="Online users"
-    >
-      Online users: Connecting...
-    </section>
+    <div class="chat-layout">
+      <aside class="members-panel">
+        <div class="panel-heading">
+          <h2>Classmates</h2>
+          <span id="online-count" class="count-pill">0 online</span>
+        </div>
+        <p class="panel-hint">People currently in the chat</p>
+        <div id="online-users" class="online-users" aria-live="polite" aria-label="Online users">
+          <p class="muted">Connecting…</p>
+        </div>
+        <div class="help-card">
+          <span class="help-icon" aria-hidden="true">☁</span>
+          <div>
+            <strong>Weather check</strong>
+            <p>Try <code>/weather Manila</code> in the message box.</p>
+          </div>
+        </div>
+      </aside>
 
-    <!-- Chat Messages -->
-    <ul
-      id="messages"
-      class="messages"
-      aria-live="polite"
-    ></ul>
+      <section class="conversation" aria-label="Class conversation">
+        <div class="conversation-heading">
+          <div>
+            <h2>General chat</h2>
+            <p><span class="status-dot"></span> Class conversation</p>
+          </div>
+          <span class="secure-label">● Live chat</span>
+        </div>
 
-    <!-- Message Input -->
-    <form
-      id="message-form"
-      class="composer"
-      autocomplete="off"
-    >
-      <label for="message-input" class="visually-hidden">
-        Message
-      </label>
+        <ul id="messages" class="messages" aria-live="polite" aria-label="Messages"></ul>
+        <div id="typing-indicator" class="typing-indicator" aria-live="polite" hidden></div>
 
-      <input
-        id="message-input"
-        type="text"
-        maxlength="500"
-        required
-        placeholder="Type a message or /weather Manila"
-      >
-
-      <button type="submit">Send</button>
-    </form>
-
+        <form id="message-form" class="composer" autocomplete="off">
+          <label for="message-input" class="visually-hidden">Message</label>
+          <input id="message-input" type="text" maxlength="500" required placeholder="Write a message… (or /weather Manila)">
+          <button id="send-btn" type="submit" aria-label="Send message"><span>Send</span><span aria-hidden="true">↗</span></button>
+        </form>
+        <p class="composer-note">Be kind. Keep the conversation respectful.</p>
+      </section>
+    </div>
   </main>
 
-  <footer>Abel Cabalitasan</footer>
+  <footer class="site-footer">Made for classmates <span aria-hidden="true">✦</span></footer>
 
-  <!-- Supabase Library -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.1"></script>
-
-  <!-- Your JavaScript -->
   <script src="script.js"></script>
-
 </body>
 </html>
