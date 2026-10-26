@@ -198,6 +198,7 @@ async function nameFor(userId) {
   return names[userId];
 }
 async function loadMessages() {
+  // updated_at is intentionally omitted because it is not present in the current schema.
   const { data, error } = await sb.from("messages")
     .select("id, user_id, content, created_at")
     .order("created_at", { ascending: false }).limit(50);
@@ -212,6 +213,133 @@ async function loadMessages() {
   }
   showEmptyState();
 }
+
+/* Close open menus when the user clicks elsewhere or presses Escape. */
+function closeMessageMenus(exceptMenu = null) {
+  document.querySelectorAll(".message-menu").forEach(menu => {
+    if (menu === exceptMenu) return;
+    menu.hidden = true;
+    const toggle = menu.parentElement?.querySelector(".message-menu-toggle");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+  });
+}
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".message-actions")) return;
+  closeMessageMenus();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeMessageMenus();
+});
+
+function createMessageActions(msg, text, item) {
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+
+  const menuButton = document.createElement("button");
+  menuButton.type = "button";
+  menuButton.className = "message-menu-toggle";
+  menuButton.textContent = "⋮";
+  menuButton.setAttribute("aria-label", "Message options");
+  menuButton.setAttribute("aria-haspopup", "true");
+  menuButton.setAttribute("aria-expanded", "false");
+  menuButton.title = "Message options";
+
+  const menu = document.createElement("div");
+  menu.className = "message-menu";
+  menu.hidden = true;
+
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "edit-btn";
+  editBtn.textContent = "Edit";
+
+  editBtn.addEventListener("click", async () => {
+    menu.hidden = true;
+    menuButton.setAttribute("aria-expanded", "false");
+    if (!currentUser || currentUser.id !== msg.user_id) return;
+
+    const updated = prompt("Edit your message:", text.textContent);
+    if (updated === null) return;
+    const newContent = updated.trim();
+    if (!newContent || newContent.length > 500) {
+      alert("Message must contain 1 to 500 characters.");
+      return;
+    }
+    if (newContent === text.textContent) return;
+
+    editBtn.disabled = true;
+    try {
+      // Do not select updated_at; that column does not exist in this database.
+      const { data, error } = await sb.from("messages")
+        .update({ content: newContent })
+        .eq("id", msg.id)
+        .eq("user_id", currentUser.id)
+        .select("id, user_id, content, created_at")
+        .maybeSingle();
+      if (error) {
+        explainDbError("Edit message", error);
+        return;
+      }
+      if (!data) {
+        alert("No message was updated. Check the UPDATE policy and confirm user_id matches your signed-in Supabase user.");
+        return;
+      }
+      showMessage(data);
+    } catch (error) {
+      explainDbError("Edit message", error);
+    } finally {
+      editBtn.disabled = false;
+    }
+  });
+
+  const unsendBtn = document.createElement("button");
+  unsendBtn.type = "button";
+  unsendBtn.className = "unsend-btn";
+  unsendBtn.textContent = "Unsend";
+
+  unsendBtn.addEventListener("click", async () => {
+    menu.hidden = true;
+    menuButton.setAttribute("aria-expanded", "false");
+    if (!currentUser || currentUser.id !== msg.user_id) return;
+    if (!confirm("Unsend this message for everyone?")) return;
+
+    unsendBtn.disabled = true;
+    try {
+      const { data, error } = await sb.from("messages").delete()
+        .eq("id", msg.id)
+        .eq("user_id", currentUser.id)
+        .select("id")
+        .maybeSingle();
+      if (error) {
+        explainDbError("Unsend message", error);
+        return;
+      }
+      if (!data) {
+        alert("No message was deleted. Check the DELETE policy and message ownership.");
+        return;
+      }
+      item.remove();
+      showEmptyState();
+    } catch (error) {
+      explainDbError("Unsend message", error);
+    } finally {
+      unsendBtn.disabled = false;
+    }
+  });
+
+  menuButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const willOpen = menu.hidden;
+    closeMessageMenus(menu);
+    menu.hidden = !willOpen;
+    menuButton.setAttribute("aria-expanded", String(willOpen));
+  });
+
+  menu.append(editBtn, unsendBtn);
+  actions.append(menuButton, menu);
+  return actions;
+}
+
 function showMessage(msg) {
   if (!currentUser || !msg) return;
   const selector = `[data-id="${CSS.escape(String(msg.id))}"]`;
@@ -242,76 +370,12 @@ function showMessage(msg) {
 
   const time = document.createElement("time");
   time.dateTime = msg.created_at || "";
-  time.textContent = msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  time.textContent = msg.created_at
+    ? new Date(msg.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : "";
 
-  item.append(top, text);
-  if (msg.updated_at && msg.updated_at !== msg.created_at) {
-    const edited = document.createElement("span");
-    edited.className = "edited-label";
-    edited.textContent = "edited";
-    item.append(edited);
-  }
-  item.append(time);
-
-  if (isMine) {
-    const actions = document.createElement("div");
-    actions.className = "message-actions";
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.className = "edit-btn";
-    editBtn.textContent = "Edit";
-    editBtn.addEventListener("click", async () => {
-      if (!currentUser || currentUser.id !== msg.user_id) return;
-      const updated = prompt("Edit your message:", text.textContent);
-      if (updated === null) return;
-      const newContent = updated.trim();
-      if (!newContent || newContent.length > 500) {
-        alert("Message must contain 1 to 500 characters.");
-        return;
-      }
-      if (newContent === text.textContent) return;
-      editBtn.disabled = true;
-      try {
-        const { data, error } = await sb.from("messages")
-          .update({ content: newContent })
-          .eq("id", msg.id).eq("user_id", currentUser.id)
-          .select("id, user_id, content, created_at, updated_at").maybeSingle();
-        if (error) { explainDbError("Edit message", error); return; }
-        if (!data) {
-          alert("No message was updated. Check the UPDATE policy and confirm user_id matches your signed-in Supabase user.");
-          return;
-        }
-        showMessage(data);
-      } catch (error) {
-        explainDbError("Edit message", error);
-      } finally { editBtn.disabled = false; }
-    });
-
-    const unsendBtn = document.createElement("button");
-    unsendBtn.type = "button";
-    unsendBtn.className = "unsend-btn";
-    unsendBtn.textContent = "Unsend";
-    unsendBtn.addEventListener("click", async () => {
-      if (!currentUser || currentUser.id !== msg.user_id) return;
-      if (!confirm("Unsend this message for everyone?")) return;
-      unsendBtn.disabled = true;
-      try {
-        const { data, error } = await sb.from("messages").delete()
-          .eq("id", msg.id).eq("user_id", currentUser.id).select("id").maybeSingle();
-        if (error) { explainDbError("Unsend message", error); return; }
-        if (!data) {
-          alert("No message was deleted. Check the DELETE policy and message ownership.");
-          return;
-        }
-        item.remove();
-        showEmptyState();
-      } catch (error) {
-        explainDbError("Unsend message", error);
-      } finally { unsendBtn.disabled = false; }
-    });
-    actions.append(editBtn, unsendBtn);
-    item.append(actions);
-  }
+  item.append(top, text, time);
+  if (isMine) item.append(createMessageActions(msg, text, item));
   messageList.append(item);
   scrollToLatest();
 }
@@ -330,10 +394,12 @@ messageForm.addEventListener("submit", async (event) => {
   }
   sendBtn.disabled = true;
   try {
-    // Keep the existing schema/defaults. If user_id is not defaulted to auth.uid(),
-    // the INSERT policy/schema must be checked in Supabase before changing this.
+    // Keep the existing schema/defaults. Supabase RLS remains enabled.
     const { error } = await sb.from("messages").insert({ content });
-    if (error) { explainDbError("Send message", error); return; }
+    if (error) {
+      explainDbError("Send message", error);
+      return;
+    }
     messageInput.value = "";
     sendTyping(false);
   } catch (error) {
@@ -534,142 +600,3 @@ function showBotMessage(text) {
   if (error) console.error("Session restore error:", error.message);
   if (data?.session?.user && !currentUser) startChat(data.session.user);
 })();
-
-if (isMine) {
-  const actions = document.createElement("div");
-  actions.className = "message-actions";
-
-  const menuButton = document.createElement("button");
-  menuButton.type = "button";
-  menuButton.className = "message-menu-toggle";
-  menuButton.textContent = "⋮";
-  menuButton.setAttribute("aria-label", "Message options");
-  menuButton.setAttribute("aria-expanded", "false");
-
-  const menu = document.createElement("div");
-  menu.className = "message-menu";
-  menu.hidden = true;
-
-  // EDIT BUTTON
-  const editBtn = document.createElement("button");
-  editBtn.type = "button";
-  editBtn.className = "edit-btn";
-  editBtn.textContent = "Edit";
-
-  editBtn.addEventListener("click", async () => {
-    menu.hidden = true;
-    menuButton.setAttribute("aria-expanded", "false");
-
-    if (!currentUser || currentUser.id !== msg.user_id) return;
-
-    const updated = prompt("Edit your message:", text.textContent);
-    if (updated === null) return;
-
-    const newContent = updated.trim();
-
-    if (!newContent || newContent.length > 500) {
-      alert("Message must contain 1 to 500 characters.");
-      return;
-    }
-
-    if (newContent === text.textContent) return;
-
-    editBtn.disabled = true;
-
-    try {
-      const { data, error } = await sb.from("messages")
-        .update({ content: newContent })
-        .eq("id", msg.id)
-        .eq("user_id", currentUser.id)
-        .select("id, user_id, content, created_at, updated_at")
-        .maybeSingle();
-
-      if (error) {
-        explainDbError("Edit message", error);
-        return;
-      }
-
-      if (!data) {
-        alert("No message was updated. Check the UPDATE policy and message ownership.");
-        return;
-      }
-
-      showMessage(data);
-    } catch (error) {
-      explainDbError("Edit message", error);
-    } finally {
-      editBtn.disabled = false;
-    }
-  });
-
-  // UNSEND BUTTON
-  const unsendBtn = document.createElement("button");
-  unsendBtn.type = "button";
-  unsendBtn.className = "unsend-btn";
-  unsendBtn.textContent = "Unsend";
-
-  unsendBtn.addEventListener("click", async () => {
-    menu.hidden = true;
-    menuButton.setAttribute("aria-expanded", "false");
-
-    if (!currentUser || currentUser.id !== msg.user_id) return;
-
-    if (!confirm("Unsend this message for everyone?")) return;
-
-    unsendBtn.disabled = true;
-
-    try {
-      const { data, error } = await sb.from("messages")
-        .delete()
-        .eq("id", msg.id)
-        .eq("user_id", currentUser.id)
-        .select("id")
-        .maybeSingle();
-
-      if (error) {
-        explainDbError("Unsend message", error);
-        return;
-      }
-
-      if (!data) {
-        alert("No message was deleted. Check the DELETE policy and message ownership.");
-        return;
-      }
-
-      item.remove();
-      showEmptyState();
-    } catch (error) {
-      explainDbError("Unsend message", error);
-    } finally {
-      unsendBtn.disabled = false;
-    }
-  });
-
-  // THREE-DOT MENU
-  menuButton.addEventListener("click", (event) => {
-    event.stopPropagation();
-
-    const shouldOpen = menu.hidden;
-
-    document.querySelectorAll(".message-menu").forEach(otherMenu => {
-      otherMenu.hidden = true;
-
-      const otherButton = otherMenu.parentElement
-        ?.querySelector(".message-menu-toggle");
-
-      if (otherButton) {
-        otherButton.setAttribute("aria-expanded", "false");
-      }
-    });
-
-    menu.hidden = !shouldOpen;
-    menuButton.setAttribute(
-      "aria-expanded",
-      String(shouldOpen)
-    );
-  });
-
-  menu.append(editBtn, unsendBtn);
-  actions.append(menuButton, menu);
-  item.append(actions);
-}
